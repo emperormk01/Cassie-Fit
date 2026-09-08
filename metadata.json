@@ -1,0 +1,11 @@
+{
+  "name": "Cassie Fit - Emperor M.K",
+  "description": "A minimal, playful nutrition tracking app featuring Cassie the cat.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [],
+  "author": "Emperor M.K"
+}
