@@ -1,5 +1,7 @@
 # Cassie Fit
 
+> **Live:** [https://cassiefit.auxlo.xyz/](https://cassiefit.auxlo.xyz/)
+
 A nutrition tracking app built around a cat named Cassie who'll help you figure out what you're eating, what you should be eating, and why that pizza you had last night probably wasn't the best idea.
 
 Cassie lives in your phone, talks to you about your meals, and remembers what you like and don't like. She's not going to judge you for eating cereal for dinner — she's just going to suggest something slightly better next time.
