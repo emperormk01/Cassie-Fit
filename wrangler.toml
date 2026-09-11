@@ -17,5 +17,5 @@ database_name = "cassie-fit-db"
 database_id = "3fbf44be-80c5-4442-876b-67b374bbba1d"
 
 routes = [
-  { pattern = "cassie-fit.auxlo.xyz", custom_domain = true }
+  { pattern = "cassiefit.auxlo.xyz", custom_domain = true }
 ]
