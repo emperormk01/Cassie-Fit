@@ -29,7 +29,7 @@ import { ChatHome } from './components/ChatHome';
 import { DashboardView } from './components/DashboardView';
 import { ChatMessage, ChatSession, UserProfileData, DailyLogItem, UserTargets, ScheduleItem, RecommendationItem, UserMemory, MemoryUpdate } from './types';
 import { runGroqChat } from "./lib/groq";
-import { supabase } from './lib/supabase';
+import { me, logout, sync, saveProfile, getPlan, saveMemory, saveChatSession, saveLog, deleteLogs } from './lib/api';
 
 type LogMode = 'none' | 'scan' | 'search' | 'weight' | 'photo';
 
@@ -41,7 +41,7 @@ export default function App() {
   // Onboarding & User State
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
   const [userProfile, setUserProfile] = useState<UserProfileData | null>(null);
-  const [supabaseUser, setSupabaseUser] = useState<any>(null);
+  const [apiUser, setApiUser] = useState<{ id: string; email: string; name: string | null } | null>(null);
   
   // Premium State
   const [isPremium, setIsPremium] = useState(false);
@@ -49,7 +49,7 @@ export default function App() {
   const [isSyncingPayment, setIsSyncingPayment] = useState(false);
 
   // Temp Data passed to onboarding (if new user)
-  const [googleUserData, setGoogleUserData] = useState<any>(null);
+  const [signupUserData, setSignupUserData] = useState<any>(null);
 
   // Default tab is Home (Chat)
   const [activeTab, setActiveTab] = useState('home');
@@ -135,49 +135,41 @@ export default function App() {
 
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
 
-  // --- SUPABASE DATA SYNC HELPERS ---
+  // --- CLOUDFLARE DATA SYNC HELPERS ---
 
-  const loadSupabaseData = async (userId: string) => {
+  const loadApiData = async () => {
     try {
-      // 1. Logs
-      const { data: logs } = await supabase
-        .from('daily_logs')
-        .select('data')
-        .order('created_at', { ascending: false })
-        .limit(100); 
+      const data = await sync();
+      return data;
 
-      if (logs && logs.length > 0) {
-        const loadedLogs = logs.map(l => l.data);
-        const uniqueLogs = Array.from(new Map(loadedLogs.map(item => [item.id, item])).values());
-        setDailyLog(uniqueLogs);
+      // 1. Logs
+      if (data.logs && data.logs.length > 0) {
+        const uniqueLogs = Array.from(new Map(data.logs.map((item: any) => [item.id, item])).values());
+        setDailyLog(uniqueLogs as DailyLogItem[]);
       }
 
       // 2. Sessions
-      const { data: sess } = await supabase
-        .from('chat_sessions')
-        .select('data')
-        .order('updated_at', { ascending: false })
-        .limit(20); 
-
-      if (sess && sess.length > 0) {
-        setSessions(sess.map(s => s.data));
-        if (!currentSessionId && sess[0].data.id) {
-           setCurrentSessionId(sess[0].data.id);
+      if (data.sessions && data.sessions.length > 0) {
+        setSessions(data.sessions);
+        if (!currentSessionId && data.sessions[0].id) {
+           setCurrentSessionId(data.sessions[0].id);
         }
       }
 
       // 3. Memory
-      const { data: mem } = await supabase
-        .from('user_memory')
-        .select('data')
-        .eq('user_id', userId)
-        .single();
-      
-      if (mem && mem.data) {
-        setUserMemory(mem.data);
+      if (data.memory) {
+        setUserMemory(data.memory);
       }
+
+      // 4. Premium from plan
+      if (data.plan_type === 'pro' || data.plan_type === 'agency') {
+        localStorage.setItem('cassie_is_premium', 'true');
+        setIsPremium(true);
+      }
+      return data;
     } catch (e) {
       console.error("Failed to sync data", e);
+      return null;
     }
   };
 
@@ -187,19 +179,15 @@ export default function App() {
     const status = params.get('status');
     const txRef = params.get('tx_ref');
 
-    if (status === 'successful' && txRef && supabaseUser) {
+    if (status === 'successful' && txRef && apiUser) {
         setIsSyncingPayment(true);
         // Start Polling
         const pollInterval = setInterval(async () => {
             console.log("Polling for payment status update...");
-            
-            const { data, error } = await supabase
-                .from('profiles')
-                .select('data, plan_type')
-                .eq('id', supabaseUser.id)
-                .single();
 
-            if (data && (data.plan_type === 'pro' || data.plan_type === 'agency')) {
+            const plan = await getPlan().catch(() => 'free');
+
+            if (plan === 'pro' || plan === 'agency') {
                 // Success!
                 clearInterval(pollInterval);
                 setIsSyncingPayment(false);
@@ -222,7 +210,7 @@ export default function App() {
 
         return () => clearInterval(pollInterval);
     }
-  }, [supabaseUser]);
+  }, [apiUser]);
 
   // --- PERSISTENCE EFFECTS ---
 
@@ -239,54 +227,44 @@ export default function App() {
        setUserProfile({ ...userProfile, isPremium: true });
     }
 
-    if (shouldSaveToDb && supabaseUser && userProfile) {
+    if (shouldSaveToDb && apiUser && userProfile) {
         // Optimistic update
-        supabase.from('profiles').update({
-             data: { ...userProfile, isPremium: true },
-             updated_at: new Date()
-        }).eq('id', supabaseUser.id);
+        saveProfile({ ...userProfile, isPremium: true }).catch((e) =>
+          console.error("Profile save error", e)
+        );
     }
   };
 
   // Persist Memory
   useEffect(() => {
     localStorage.setItem('cassie_user_memory', JSON.stringify(userMemory));
-    if (supabaseUser) {
+    if (apiUser) {
       const timer = setTimeout(() => {
-        supabase.from('user_memory').upsert({
-          user_id: supabaseUser.id,
-          data: userMemory,
-          updated_at: new Date()
-        }).then(({ error }) => {
-          if (error) console.error("Memory sync error", error);
+        saveMemory(userMemory).catch((error) => {
+          console.error("Memory sync error", error);
         });
-      }, 2000); 
+      }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [userMemory, supabaseUser]);
+  }, [userMemory, apiUser]);
 
   // Persist Sessions
   useEffect(() => {
     if (sessions.length > 0) {
        localStorage.setItem('cassie_sessions', JSON.stringify(sessions));
-       if (supabaseUser) {
+       if (apiUser) {
          const timer = setTimeout(() => {
             const current = sessions.find(s => s.id === currentSessionId);
             if (current) {
-                supabase.from('chat_sessions').upsert({
-                   id: current.id,
-                   user_id: supabaseUser.id,
-                   data: current,
-                   updated_at: new Date()
-                }).then(({error}) => {
-                   if (error) console.error("Session sync error", error);
+                saveChatSession(current).catch((error) => {
+                   console.error("Session sync error", error);
                 });
             }
          }, 3000);
          return () => clearTimeout(timer);
        }
     }
-  }, [sessions, currentSessionId, supabaseUser]);
+  }, [sessions, currentSessionId, apiUser]);
 
   // Persist Log
   useEffect(() => {
@@ -302,39 +280,24 @@ export default function App() {
 
   // --- SESSION MANAGEMENT ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      handleSession(session);
+    me().then((user) => {
+      handleSession(user);
     });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      handleSession(session);
-    });
-
-    return () => subscription.unsubscribe();
   }, []);
 
-  const handleSession = async (session: any) => {
+  const handleSession = async (user: { id: string; email: string; name: string | null } | null) => {
     setIsLoadingSession(true);
-    if (session) {
-      setSupabaseUser(session.user);
+    if (user) {
+      setApiUser(user);
       setIsAuthenticated(true);
-      await loadSupabaseData(session.user.id);
+      const data = await loadApiData();
 
       try {
-        // Fetch raw profile row to check new plan_type column as well as JSON data
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*') // Select all including plan_type
-          .eq('id', session.user.id)
-          .single();
-        
-        if (data && data.data) {
-          const profile = data.data as UserProfileData;
-          
-          // Merge SQL column data into TS object if needed, or rely on JSON
-          // Ideally, we sync them. If plan_type is 'pro', ensure isPremium is true.
+        // Profile + plan arrive with the sync payload
+        if (data && data.profile) {
+          const profile = data.profile as UserProfileData;
+
+          // If plan_type is 'pro', ensure isPremium is true.
           if (data.plan_type === 'pro' || data.plan_type === 'agency') {
              profile.isPremium = true;
              localStorage.setItem('cassie_is_premium', 'true');
@@ -345,12 +308,8 @@ export default function App() {
           setHasCompletedOnboarding(true);
         } else {
           setHasCompletedOnboarding(false);
-          const meta = session.user.user_metadata;
-          if (meta) {
-             setGoogleUserData({
-               name: meta.full_name || meta.name,
-               picture: meta.avatar_url || meta.picture
-             });
+          if (user.name) {
+             setSignupUserData({ name: user.name });
           }
         }
       } catch (error) {
@@ -368,11 +327,11 @@ export default function App() {
          } catch(e) {
            setIsAuthenticated(false);
          }
-      } else {
-         setIsAuthenticated(false);
-         setSupabaseUser(null);
-         setUserProfile(null);
-      }
+       } else {
+          setIsAuthenticated(false);
+          setApiUser(null);
+          setUserProfile(null);
+       }
     }
     setIsLoadingSession(false);
   };
@@ -438,8 +397,8 @@ export default function App() {
   };
 
   const handleFactoryReset = () => {
+    logout();
     localStorage.clear();
-    supabase.auth.signOut();
     window.location.reload();
   };
 
@@ -460,9 +419,9 @@ export default function App() {
     setDailyLog(uniqueLogs);
     localStorage.setItem('cassie_daily_log', JSON.stringify(uniqueLogs));
 
-    if (supabaseUser && idsToDelete.length > 0) {
+    if (apiUser && idsToDelete.length > 0) {
         try {
-            await supabase.from('daily_logs').delete().in('id', idsToDelete);
+            await deleteLogs(idsToDelete);
         } catch (e) {
             console.error("Failed to clean DB duplicates:", e);
         }
@@ -626,15 +585,12 @@ export default function App() {
     setUserProfile(data);
     setHasCompletedOnboarding(true);
 
-    if (supabaseUser) {
-        const { error } = await supabase
-           .from('profiles')
-           .upsert({ 
-               id: supabaseUser.id, 
-               data: data,
-               updated_at: new Date()
-           });
-        if (error) console.error("Failed to save profile:", error);
+    if (apiUser) {
+        try {
+            await saveProfile(data);
+        } catch (error) {
+            console.error("Failed to save profile:", error);
+        }
     } else {
         localStorage.setItem('cassie_user_profile', JSON.stringify(data));
         localStorage.setItem('cassie_onboarding_complete', 'true');
@@ -660,7 +616,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await logout();
     localStorage.clear();
     setIsAuthenticated(false);
     setUserProfile(null);
@@ -668,8 +624,8 @@ export default function App() {
     setDailyLog([]);
     setCustomTargets(null);
     setCustomSchedule(null);
-    setGoogleUserData(null);
-    setSupabaseUser(null);
+    setSignupUserData(null);
+    setApiUser(null);
     setIsPremium(false);
     setUserMemory({
        favorites: [],
@@ -688,12 +644,12 @@ export default function App() {
 
   const handleUpdateProfile = async (data: UserProfileData) => {
     setUserProfile(data);
-    if (supabaseUser) {
-        const { error } = await supabase
-           .from('profiles')
-           .update({ data: data, updated_at: new Date() })
-           .eq('id', supabaseUser.id);
-        if (error) console.error("Failed to update profile:", error);
+    if (apiUser) {
+        try {
+            await saveProfile(data);
+        } catch (error) {
+            console.error("Failed to update profile:", error);
+        }
     } else {
         localStorage.setItem('cassie_user_profile', JSON.stringify(data));
     }
@@ -731,14 +687,9 @@ export default function App() {
     setLastScannedFood(data.name);
     setDailyLog(prev => [newItem, ...prev]);
 
-    if (supabaseUser) {
-        supabase.from('daily_logs').insert({
-            id: newItem.id,
-            user_id: supabaseUser.id,
-            data: newItem,
-            created_at: new Date(now)
-        }).then(({ error }) => {
-            if (error) console.error("Failed to sync log:", error);
+    if (apiUser) {
+        saveLog(newItem).catch((error) => {
+            console.error("Failed to sync log:", error);
         });
     }
   };
@@ -818,7 +769,7 @@ export default function App() {
   }
 
   if (!hasCompletedOnboarding) {
-    return <OnboardingFlow onComplete={handleOnboardingComplete} initialData={googleUserData} />;
+    return <OnboardingFlow onComplete={handleOnboardingComplete} initialData={signupUserData} />;
   }
 
   if (isSyncingPayment) {
@@ -875,9 +826,9 @@ export default function App() {
         <PremiumModal 
           isOpen={isPremiumModalOpen} 
           onClose={() => setIsPremiumModalOpen(false)} 
-          onUpgrade={() => handleUpgrade(true)}
-          userId={supabaseUser?.id}
-          userEmail={supabaseUser?.email}
+           onUpgrade={() => handleUpgrade(true)}
+           userId={apiUser?.id}
+           userEmail={apiUser?.email}
         />
 
         <ScanBarcodeModal isOpen={activeLogMode === 'scan'} onClose={closeLogModal} />

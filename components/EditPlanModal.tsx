@@ -1,9 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, Check, Flame, Fish, Apple, Droplet, RotateCcw, Clock, Calendar, AlertCircle, ExternalLink, Download } from 'lucide-react';
+import { X, Check, Flame, Fish, Apple, Droplet, RotateCcw, Clock, Calendar, AlertCircle, Download } from 'lucide-react';
 import { Button } from './Button';
 import { UserTargets, ScheduleItem } from '../types';
-import { supabase } from '../lib/supabase';
 
 interface EditPlanModalProps {
   isOpen: boolean;
@@ -26,7 +25,6 @@ export const EditPlanModal: React.FC<EditPlanModalProps> = ({
   const [schedule, setSchedule] = useState<ScheduleItem[]>(currentSchedule);
   
   // Sync State
-  const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [syncMessage, setSyncMessage] = useState('');
 
@@ -119,70 +117,12 @@ END:VEVENT
     setSyncMessage("Schedule file downloaded! Open it to add alarms to your system Clock/Calendar.");
   };
 
+  // Direct Google Calendar sync required Google OAuth, which Cassie Fit no
+  // longer uses. Schedule export now goes through the System Calendar
+  // (.ics download) button below, which works with every calendar app.
   const handleSyncToCalendar = async () => {
-    setIsSyncing(true);
-    setSyncStatus('idle');
-    setSyncMessage('');
-
-    try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (!session || !session.provider_token) {
-            throw new Error("Missing permissions. Please try the 'System Calendar' button instead.");
-        }
-
-        const token = session.provider_token;
-        let successCount = 0;
-
-        // Loop through schedule and add events
-        for (const item of schedule) {
-            const { start, end } = getEventTime(item.time);
-            
-            const event = {
-                summary: `Cassie Fit: ${item.label}`,
-                description: "Part of your daily healthy routine from Cassie Fit.",
-                start: { dateTime: start, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-                end: { dateTime: end, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-                reminders: {
-                    useDefault: false,
-                    overrides: [{ method: 'popup', minutes: 15 }]
-                },
-                colorId: '5' // Yellow (Breakfast-y)
-            };
-
-            const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(event)
-            });
-
-            if (response.ok) successCount++;
-            else {
-                const err = await response.json();
-                console.error("Calendar API Error:", err);
-                if (response.status === 401 || response.status === 403) {
-                    throw new Error("Google blocked this action. Use 'System Calendar' export instead.");
-                }
-            }
-        }
-
-        if (successCount > 0) {
-            setSyncStatus('success');
-            setSyncMessage(`Successfully added ${successCount} meals to your Google Calendar!`);
-        } else {
-            throw new Error("Failed to add events. Check your connection.");
-        }
-
-    } catch (error: any) {
-        console.error("Sync Error:", error);
-        setSyncStatus('error');
-        setSyncMessage(error.message || "Failed to sync.");
-    } finally {
-        setIsSyncing(false);
-    }
+    setSyncStatus('error');
+    setSyncMessage("Google sync was removed with Google login. Use 'Add to System Calendar' to export your schedule instead.");
   };
 
   if (!isOpen) return null;
@@ -306,7 +246,7 @@ END:VEVENT
            </div>
         </div>
 
-        {/* Google Calendar Sync Feedback */}
+        {/* Schedule Export Feedback */}
         {syncMessage && (
             <div className={`mb-4 p-4 rounded-2xl border flex items-start gap-3 ${
                 syncStatus === 'success' 
@@ -316,16 +256,6 @@ END:VEVENT
                 {syncStatus === 'success' ? <Check size={18} className="mt-0.5" /> : <AlertCircle size={18} className="mt-0.5" />}
                 <div className="flex-1">
                     <p className="text-sm font-bold">{syncMessage}</p>
-                    {syncStatus === 'success' && (
-                        <a 
-                            href="https://calendar.google.com" 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
-                            className="text-xs font-bold underline mt-1 inline-flex items-center gap-1 opacity-80 hover:opacity-100"
-                        >
-                            Open Google Calendar <ExternalLink size={10} />
-                        </a>
-                    )}
                 </div>
             </div>
         )}
@@ -341,17 +271,12 @@ END:VEVENT
                     Add to System Calendar
                 </button>
 
-                <button 
+                <button
                     onClick={handleSyncToCalendar}
-                    disabled={isSyncing}
                     className="col-span-1 bg-white dark:bg-slate-800 border-2 border-slate-100 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-500 dark:text-slate-400 font-bold py-3.5 rounded-[2rem] flex flex-col items-center justify-center gap-1 transition-all active:scale-95 group text-xs sm:text-sm"
                 >
-                    {isSyncing ? (
-                        <div className="w-5 h-5 border-2 border-slate-300 border-t-slate-500 rounded-full animate-spin mb-1" />
-                    ) : (
-                        <Calendar size={18} className="text-slate-400 group-hover:text-blue-500 group-hover:scale-110 transition-transform mb-1" />
-                    )}
-                    {isSyncing ? 'Syncing...' : 'Google Calendar'}
+                    <Calendar size={18} className="text-slate-400 group-hover:text-blue-500 group-hover:scale-110 transition-transform mb-1" />
+                    Google Calendar
                 </button>
             </div>
 
