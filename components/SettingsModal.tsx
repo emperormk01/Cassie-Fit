@@ -195,7 +195,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                        <Info size={16} />
                     </div>
                     <p className="text-xs font-bold text-slate-400">Cassie Health v1.2.0</p>
-                    <p className="text-[10px] text-slate-300 font-medium">Made with 💙 by AI</p>
+                    <p className="text-[10px] text-slate-300 font-medium">Made by Emperor M.K</p>
                  </div>
              </>
          ) : (
